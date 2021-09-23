@@ -1,5 +1,7 @@
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions._
+import org.apache.spark.sql.Row
+import org.apache.spark.sql.catalyst.expressions.WindowSpec
 import org.apache.spark.sql.expressions.Window
 import scalaj.http._
 
@@ -13,52 +15,76 @@ object DotaETL extends App {
     .appName("DotaETL")
     .getOrCreate()
   spark.sparkContext.setLogLevel("ERROR")
+  import spark.implicits._
 
   val account_id = 639740
-  val request: HttpRequest = Http(s"https://api.opendota.com/api/players/$account_id/recentMatches")
-  val response = request.asString
+  val number_matches = 5
 
-  import spark.implicits._
-  val df = Seq(response.body).toDS()
-  val jsonDF = spark.read.json(df)
+  def prepParsedDF(df: DataFrame, array_to_parse: String): DataFrame = {
+    def parseDFArray(df: DataFrame, array_to_parse: String): DataFrame =
+      df.select($"match_id", explode(col(array_to_parse)).alias(array_to_parse))
 
-  val kdaDF = jsonDF.select(
-    lit(account_id).alias("account_id"),
-    $"match_id",
-    $"kills",
-    $"assists",
-    $"deaths",
-    ($"kills" + $"assists" / $"deaths").alias("KDA"))
-  val accountDF = kdaDF.limit(5)
+    def sumTeamKills(df: DataFrame): DataFrame = {
+      val w = Window.partitionBy("match_id", "players.isRadiant")
+      df.select(
+      $"match_id",
+        $"players.account_id",
+        $"players.isRadiant",
+        $"players.kills",
+        $"players.assists",
+        sum("players.kills").over(w).alias("total_team_kills"))
+    }
 
-  val request2: HttpRequest = Http(s"https://api.opendota.com/api/players/$account_id")
-  val response2 = request2.asString
-  val nameDS = Seq(response2.body).toDS()
-  val nameDF = spark.read.json(nameDS).select("profile.account_id", "profile.name")
+    def calcKP(df: DataFrame): DataFrame =
+      df.select(
+        $"match_id",
+        $"account_id",
+        when($"isRadiant" === true, "Radiant").otherwise("Dire").alias("team"),
+        ((($"kills" + $"assists")/$"total_team_kills")*100).alias("KP"))
 
+    calcKP(sumTeamKills(parseDFArray(df, array_to_parse)))
+  }
+
+  def getMatchesDF(df: DataFrame, col_to_get: String): DataFrame = {
+    def getMatchesList(df: DataFrame, col_to_get: String): List[Long] = {
+      val func = (x: Row) => x.getLong(0)
+      df.select(col_to_get).map(func).collect.toList
+    }
+
+    def getMatchDataFromAPI(match_list: List[Long]): DataFrame = {
+      val func = (x: Long) => Http(s"https://api.opendota.com/api/matches/$x").asString.body
+      val matchDS = match_list.map(func)toDS()
+      spark.read.json(matchDS)
+    }
+
+    getMatchDataFromAPI(getMatchesList(df, col_to_get))
+  }
+
+  def prepAccountDF(df: DataFrame, number_of_matches: Int): DataFrame =
+    df.select(lit(account_id).alias("account_id"),
+      $"match_id",
+      $"kills",
+      $"assists",
+      $"deaths",
+      ($"kills" + $"assists" / $"deaths").alias("KDA")).limit(number_of_matches)
+
+  def getDataFrameFromAPI(request: HttpRequest): DataFrame = {
+    val response = request.asString
+    val ds = Seq(response.body).toDS()
+    spark.read.json(ds)
+  }
+
+  val recentMatchesDF = getDataFrameFromAPI(Http(s"https://api.opendota.com/api/players/$account_id/recentMatches"))
+  val accountDF = prepAccountDF(recentMatchesDF, number_matches)
+
+  val nameDF = getDataFrameFromAPI(Http(s"https://api.opendota.com/api/players/$account_id")).select("profile.account_id", "profile.name")
   val playerDF = accountDF.join(nameDF, "account_id")
+  val matchDF = getMatchesDF(playerDF, "match_id")
 
-  val myList = playerDF.select("match_id").map(f => f.getLong(0)).collectAsList()
-  val func = (x: Long) => Http(s"https://api.opendota.com/api/matches/$x").asString.body
-  val matchList = myList.map(func)
-  val matchDS = matchList.toList.toDS()
-  val matchDF = spark.read.json(matchDS)
+  val parsedDF = prepParsedDF(matchDF, "players")
+  parsedDF.show()
 
-  val w = Window.partitionBy("match_id", "players.isRadiant")
-  val parsedDF = matchDF.select($"match_id", explode($"players").alias("players")).select(
-    $"match_id",
-    $"players.account_id",
-    $"players.isRadiant",
-    $"players.kills",
-    $"players.assists",
-    sum("players.kills").over(w).alias("total_team_kills"))
-  val kpDF = parsedDF.select(
-    $"match_id",
-    $"account_id",
-    when($"isRadiant" === true, "Radiant").otherwise("Dire").alias("team"),
-    ((($"kills" + $"assists")/$"total_team_kills")*100).alias("KP"))
-
-  val summaryDF = playerDF.join(kpDF, Seq("account_id", "match_id"))
+  val summaryDF = playerDF.join(parsedDF, Seq("account_id", "match_id"))
   val aggregatedDF = summaryDF.groupBy("name")
     .agg(
       count("match_id").as("total_games"),
@@ -79,9 +105,9 @@ object DotaETL extends App {
     concat(round($"min_kp"), lit("%")).alias("min_kp"),
     concat(round($"avg_kp"), lit("%")).alias("avg_kp")
   )
-  formattedDF.show()
+  //formattedDF.show()
   //TODO: make it runnable in Dockerfile
-  formattedDF.coalesce(1).write.json("resources/output")
+  //formattedDF.coalesce(1).write.json("resources/output")
 
   spark.stop()
   System.exit(0)
