@@ -13,7 +13,8 @@ object DotaETL extends App {
     .getOrCreate()
   spark.sparkContext.setLogLevel("ERROR")
 
-  val request: HttpRequest = Http("https://api.opendota.com/api/players/639740/recentMatches")
+  val account_id = 639740
+  val request: HttpRequest = Http(s"https://api.opendota.com/api/players/$account_id/recentMatches")
   val response = request.asString
 
   import spark.implicits._
@@ -21,23 +22,30 @@ object DotaETL extends App {
   val jsonDF = spark.read.json(df)
 
   val kdaDF = jsonDF.select(
+    lit(account_id),
     $"match_id",
     $"kills",
     $"assists",
     $"deaths",
     ($"kills" + $"assists" / $"deaths").alias("KDA"))
-  val nDF = kdaDF.limit(5)
+  val accountDF = kdaDF.limit(5)
 
-  val myList = nDF.select("match_id").map(f => f.getLong(0)).collectAsList()
+  val request2: HttpRequest = Http(s"https://api.opendota.com/api/players/$account_id")
+  val response2 = request2.asString
+  val playerDS = Seq(response2.body).toDS()
+  val playerDF = spark.read.json(playerDS).select("profile.account_id", "profile.name")
+
+  val finalDF = accountDF.join(playerDF, "account_id")
+
+  val myList = finalDF.select("match_id").map(f => f.getLong(0)).collectAsList()
   val func = (x: Long) => Http(s"https://api.opendota.com/api/matches/$x").asString.body
-  val testList = myList.map(func)
-  val matchDS = testList.toList.toDS()
+  val matchList = myList.map(func)
+  val matchDS = matchList.toList.toDS()
   val matchDF = spark.read.json(matchDS)
 
 
-  val finalDF = matchDF.select(explode($"players").alias("players"))
-  finalDF.show(5, 25, true)
-  finalDF.printSchema()
+  //val finalDF = matchDF.select(explode($"players").alias("players")).select("players.name")
+  //finalDF.show(5, false)
 
   spark.stop()
   System.exit(0)
