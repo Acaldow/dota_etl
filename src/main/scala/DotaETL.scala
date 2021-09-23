@@ -68,7 +68,20 @@ object DotaETL extends App {
       max("KP").as("max_kp"),
       min("KP").as("min_kp"),
       avg("KP").as("avg_kp"))
-  aggregatedDF.show(false)
+
+  val formattedDF = aggregatedDF.select(
+    $"name".alias("player_name"),
+    $"total_games",
+    round($"max_kda", 2).alias("max_kda"),
+    round($"min_kda", 2).alias("min_kda"),
+    round($"avg_kda", 2).alias("avg_kda"),
+    concat(round($"max_kp"), lit("%")).alias("max_kp"),
+    concat(round($"min_kp"), lit("%")).alias("min_kp"),
+    concat(round($"avg_kp"), lit("%")).alias("avg_kp")
+  )
+  formattedDF.show()
+  //TODO: make it runnable in Dockerfile
+  formattedDF.coalesce(1).write.json("resources/output")
 
   spark.stop()
   System.exit(0)
