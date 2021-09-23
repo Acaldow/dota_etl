@@ -1,5 +1,6 @@
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions._
+import org.apache.spark.sql.expressions.Window
 import scalaj.http._
 
 import scala.collection.convert.ImplicitConversions.`collection AsScalaIterable`
@@ -22,7 +23,7 @@ object DotaETL extends App {
   val jsonDF = spark.read.json(df)
 
   val kdaDF = jsonDF.select(
-    lit(account_id),
+    lit(account_id).alias("account_id"),
     $"match_id",
     $"kills",
     $"assists",
@@ -43,9 +44,14 @@ object DotaETL extends App {
   val matchDS = matchList.toList.toDS()
   val matchDF = spark.read.json(matchDS)
 
-
-  //val finalDF = matchDF.select(explode($"players").alias("players")).select("players.name")
-  //finalDF.show(5, false)
+  val w = Window.partitionBy("players.isRadiant")
+  val parsedDF = matchDF.select(explode($"players").alias("players")).select(
+    $"players.account_id",
+    $"players.isRadiant",
+    $"players.kills",
+    $"players.assists",
+    sum("players.kills").over(w).alias("Total Kills"))
+  parsedDF.show(10, false)
 
   spark.stop()
   System.exit(0)
