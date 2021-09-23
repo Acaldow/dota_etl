@@ -1,0 +1,7 @@
+version: "3.9"
+services:
+  spark:
+    image: "dota_etl:v0.10"
+    ports:
+        - "4040:4040"
+    tty: true
