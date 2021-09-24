@@ -94,7 +94,7 @@ object DotaETL extends App {
       $"kills",
       $"assists",
       $"deaths",
-      ($"kills" + $"assists" / $"deaths").alias("KDA"))
+      ($"kills" + $"assists") / (when($"deaths"===0, 1).otherwise($"deaths")).alias("KDA"))
 
   def getDataFrameFromAPI(request: HttpRequest): DataFrame = {
     val response = request.asString
