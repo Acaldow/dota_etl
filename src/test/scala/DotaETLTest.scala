@@ -1,12 +1,10 @@
 import DotaETL.withKDA
-import org.mockito.MockitoSugar
 import org.scalatest.funspec.AnyFunSpec
 import org.scalatest.matchers.should.Matchers
 import org.apache.spark.sql.Row
-import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 
-class DotaETLTest extends AnyFunSpec with SparkSessionTestWrapper with Matchers with MockitoSugar {
+class DotaETLTest extends AnyFunSpec with SparkSessionTestWrapper with Matchers{
 
   import spark.implicits._
 
