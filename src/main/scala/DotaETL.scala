@@ -90,11 +90,11 @@ object DotaETL extends App {
 
   def withKDA()(df: DataFrame): DataFrame =
     df.select(lit(account_id).alias("account_id"),
-      $"match_id",
-      $"kills",
-      $"assists",
-      $"deaths",
-      ($"kills" + $"assists") / (when($"deaths"===0, 1).otherwise($"deaths")).alias("KDA"))
+      col("match_id"),
+      col("kills"),
+      col("assists"),
+      col("deaths"),
+      ((col("kills") + col("assists")) / when(col("deaths")===0, 1).otherwise(col("deaths"))).alias("KDA"))
 
   def getDataFrameFromAPI(request: HttpRequest): DataFrame = {
     val response = request.asString
@@ -114,9 +114,9 @@ object DotaETL extends App {
   val summaryDF = playerDF.join(matchDF, Seq("account_id", "match_id"))
   val formattedDF = summaryDF.transform(aggregatedModel())
 
-  //formattedDF.show()
+  formattedDF.show()
   //TODO: make it runnable in Dockerfile
-  //formattedDF.coalesce(1).write.json("resources/output")
+  formattedDF.coalesce(1).write.json("resources/output")
 
   spark.stop()
   System.exit(0)
